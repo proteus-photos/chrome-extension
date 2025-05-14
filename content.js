@@ -6,20 +6,72 @@ function createMagnifierIcon() {
     return magnifier;
 }
 
-// Function to get image information
+// Function to call the API for perceptual hashing via background script
+async function callHashAPI(imageData) {
+  try {    
+    console.info('[callHashAPI] Called with imageData');
+    
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { action: "callHashAPI", imageData: imageData },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('[callHashAPI] Error:', chrome.runtime.lastError);
+            reject(chrome.runtime.lastError);
+            return;
+          }
+          
+          if (response && response.success) {
+            console.info('[callHashAPI] Response data:', response.data);
+            if (response.data && response.data.phash) {
+              resolve(response.data.phash);
+            } else {
+              reject(new Error('Invalid response format: phash not found'));
+            }
+          } else {
+            reject(new Error(response.error || 'Unknown error in API call'));
+          }
+        }
+      );
+    });
+  } catch (error) {
+    console.error('[callHashAPI] Error:', error);
+    throw error;
+  }
+}
+
+// Function to safely get image information without using canvas
 function getImageInfo(img) {
-    return {
-        src: img.src,
-        alt: img.alt || 'No alt text',
-        width: img.naturalWidth,
-        height: img.naturalHeight,
-        fileSize: 'Unknown', // We can't get file size directly
-        format: img.src.split('.').pop().toLowerCase()
+  console.info('[getImageInfo] Getting info for image:', img.src);
+  
+  return new Promise(async (resolve) => {
+    let phash = 'Calculating...';
+    
+    try {
+      // Simply pass the image source URL to the background script
+      phash = await callHashAPI(img.src);
+    } catch (error) {
+      console.error('[getImageInfo] Error getting pHash:', error);
+      phash = 'Error calculating pHash';
+    }
+    
+    const info = {
+      src: img.src,
+      alt: img.alt || 'No alt text',
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      fileSize: 'Unknown', // We can't get file size directly
+      format: img.src.split('.').pop().split('?')[0].toLowerCase(),
+      phash: phash
     };
+    
+    console.info('[getImageInfo] Final image info:', info);
+    resolve(info);
+  });
 }
 
 // Function to show popup
-function showPopup(imageInfo) {
+async function showPopup(imageInfo) {
     const popup = document.createElement('div');
     popup.className = 'image-info-popup';
     
@@ -31,6 +83,7 @@ function showPopup(imageInfo) {
                 <p><strong>Dimensions:</strong> ${imageInfo.width}x${imageInfo.height}</p>
                 <p><strong>Format:</strong> ${imageInfo.format}</p>
                 <p><strong>Alt Text:</strong> ${imageInfo.alt}</p>
+                <p><strong>Perceptual Hash:</strong> <span class="phash-value">${imageInfo.phash}</span></p>
                 <button class="close-popup">Close</button>
             </div>
         </div>
@@ -59,21 +112,15 @@ function processImages() {
         // Skip if image already has a magnifier
         if (img.parentElement.querySelector('.image-magnifier')) return;
 
-        // Create container for image and magnifier
-        const container = document.createElement('div');
-        container.className = 'image-container';
-        
-        // Insert container before image
-        img.parentNode.insertBefore(container, img);
-        container.appendChild(img);
-
-        // Add magnifier icon
+        // Add magnifier icon directly to the image's parent
         const magnifier = createMagnifierIcon();
-        container.appendChild(magnifier);
+        img.parentNode.appendChild(magnifier);
 
         // Add click event to magnifier
-        magnifier.addEventListener('click', () => {
-            const imageInfo = getImageInfo(img);
+        magnifier.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const imageInfo = await getImageInfo(img);
             showPopup(imageInfo);
         });
     });
